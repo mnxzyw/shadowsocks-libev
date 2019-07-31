@@ -106,8 +106,8 @@ static void close_and_free_server(EV_P_ server_t *server);
 static void resolv_cb(struct sockaddr *addr, void *data);
 static void resolv_free_cb(void *data);
 
-int verbose      = 0;
-int reuse_port   = 0;
+int verbose    = 0;
+int reuse_port = 0;
 
 int is_bind_local_addr = 0;
 struct sockaddr_storage local_addr_v4;
@@ -118,7 +118,7 @@ static crypto_t *crypto;
 static int acl       = 0;
 static int mode      = TCP_ONLY;
 static int ipv6first = 0;
-       int fast_open = 0;
+int fast_open        = 0;
 static int no_delay  = 0;
 static int ret_val   = 0;
 
@@ -475,8 +475,7 @@ connect_to_remote(EV_P_ struct addrinfo *res,
     if (setnonblocking(sockfd) == -1)
         ERROR("setnonblocking");
 
-    if (is_bind_local_addr)
-    {
+    if (is_bind_local_addr) {
         struct sockaddr_storage *local_addr =
             res->ai_family == AF_INET ? &local_addr_v4 : &local_addr_v6;
         if (bind_to_addr(local_addr, sockfd) == -1) {
@@ -710,18 +709,12 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     if (server->stage == STAGE_STREAM) {
         remote = server->remote;
         buf    = remote->buf;
-
-        // Only timer the watcher if a valid connection is established
-        ev_timer_again(EV_A_ & server->recv_ctx->watcher);
     }
 
     ssize_t r = recv(server->fd, buf->data, SOCKET_BUF_SIZE, 0);
 
     if (r == 0) {
         // connection closed
-        if (verbose) {
-            LOGI("server_recv close the connection");
-        }
         close_and_free_remote(EV_A_ remote);
         close_and_free_server(EV_A_ server);
         return;
@@ -978,9 +971,6 @@ server_send_cb(EV_P_ ev_io *w, int revents)
 
     if (server->buf->len == 0) {
         // close and free
-        if (verbose) {
-            LOGI("server_send close the connection");
-        }
         close_and_free_remote(EV_A_ remote);
         close_and_free_server(EV_A_ server);
         return;
@@ -1122,15 +1112,10 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
         return;
     }
 
-    ev_timer_again(EV_A_ & server->recv_ctx->watcher);
-
     ssize_t r = recv(remote->fd, server->buf->data, SOCKET_BUF_SIZE, 0);
 
     if (r == 0) {
         // connection closed
-        if (verbose) {
-            LOGI("remote_recv close the connection");
-        }
         close_and_free_remote(EV_A_ remote);
         close_and_free_server(EV_A_ server);
         return;
@@ -1240,11 +1225,13 @@ remote_send_cb(EV_P_ ev_io *w, int revents)
         struct sockaddr_storage addr;
         socklen_t len = sizeof(struct sockaddr_storage);
         memset(&addr, 0, len);
+
         int r = getpeername(remote->fd, (struct sockaddr *)&addr, &len);
+
         if (r == 0) {
-            if (verbose) {
-                LOGI("remote connected");
-            }
+            // connection connected, stop the request timeout timer
+            ev_timer_stop(EV_A_ & server->recv_ctx->watcher);
+
             remote_send_ctx->connected = 1;
 
             if (remote->buf->len == 0) {
@@ -1265,9 +1252,6 @@ remote_send_cb(EV_P_ ev_io *w, int revents)
 
     if (remote->buf->len == 0) {
         // close and free
-        if (verbose) {
-            LOGI("remote_send close the connection");
-        }
         close_and_free_remote(EV_A_ remote);
         close_and_free_server(EV_A_ server);
         return;
@@ -1314,6 +1298,7 @@ new_remote(int fd)
 {
     if (verbose) {
         remote_conn++;
+        LOGI("new connection to remote, %d opened remote connections", remote_conn);
     }
 
     remote_t *remote = ss_malloc(sizeof(remote_t));
@@ -1363,7 +1348,7 @@ close_and_free_remote(EV_P_ remote_t *remote)
         free_remote(remote);
         if (verbose) {
             remote_conn--;
-            LOGI("current remote connection: %d", remote_conn);
+            LOGI("close a connection to remote, %d opened remote connections", remote_conn);
         }
     }
 }
@@ -1373,6 +1358,7 @@ new_server(int fd, listen_ctx_t *listener)
 {
     if (verbose) {
         server_conn++;
+        LOGI("new connection from client, %d opened client connections", server_conn);
     }
 
     server_t *server;
@@ -1408,7 +1394,7 @@ new_server(int fd, listen_ctx_t *listener)
     ev_io_init(&server->recv_ctx->io, server_recv_cb, fd, EV_READ);
     ev_io_init(&server->send_ctx->io, server_send_cb, fd, EV_WRITE);
     ev_timer_init(&server->recv_ctx->watcher, server_timeout_cb,
-                  request_timeout, listener->timeout);
+                  request_timeout, 0);
 
     cork_dllist_add(&connections, &server->entries);
 
@@ -1467,7 +1453,7 @@ close_and_free_server(EV_P_ server_t *server)
         free_server(server);
         if (verbose) {
             server_conn--;
-            LOGI("current server connection: %d", server_conn);
+            LOGI("close a connection from client, %d opened client connections", server_conn);
         }
     }
 }
@@ -1549,10 +1535,6 @@ accept_cb(EV_P_ ev_io *w, int revents)
 #endif
     setnonblocking(serverfd);
 
-    if (verbose) {
-        LOGI("accept a connection");
-    }
-
     server_t *server = new_server(serverfd, listener);
     ev_io_start(EV_A_ & server->recv_ctx->io);
     ev_timer_start(EV_A_ & server->recv_ctx->watcher);
@@ -1601,7 +1583,7 @@ main(int argc, char **argv)
 #ifdef __linux__
         { "mptcp",           no_argument,       NULL, GETOPT_VAL_MPTCP       },
 #endif
-        { NULL,                              0, NULL,                      0 }
+        { NULL,              0,                 NULL, 0                      }
     };
 
     opterr = 0;
@@ -2051,7 +2033,8 @@ main(int argc, char **argv)
                 LOGI("udp server listening at %s:%s", host ? host : "0.0.0.0", port);
             // Setup UDP
             int err = init_udprelay(host, port, mtu, crypto, atoi(timeout), iface);
-            if (err == -1) continue;
+            if (err == -1)
+                continue;
             num_listen_ctx++;
         }
 
